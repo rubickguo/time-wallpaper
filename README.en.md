@@ -72,3 +72,10 @@ Recommended release flow:
 2. Run `npm run dist`.
 3. Upload the Windows installer, portable package, and zip from `release/` to a GitHub Release.
 
+If GitHub CLI is already authenticated with `gh auth login`, you can also run:
+
+```powershell
+npm run release:github
+```
+
+This command builds Windows packages, commits current changes, pushes `main` and the version tag, and creates or updates the GitHub Release.

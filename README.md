@@ -71,3 +71,10 @@ npm run dist
 2. 运行 `npm run dist`。
 3. 将 `release/` 中的 Windows 安装包、便携版和 zip 包上传到 GitHub Release。
 
+如果本机已经通过 `gh auth login` 登录 GitHub，也可以直接运行：
+
+```powershell
+npm run release:github
+```
+
+该命令会构建 Windows 包、提交当前代码、推送 `main` 和版本 tag，并创建或更新 GitHub Release。
