@@ -31,7 +31,7 @@ npm run dev
 npm run dist
 ```
 
-构建产物会输出到 `release/` 目录，包含安装版、便携版和 zip 包。
+构建产物会输出到 `release/` 目录，包含安装版和 zip 包。
 
 ## LLM 配置
 
@@ -69,7 +69,7 @@ npm run dist
 
 1. 更新版本号。
 2. 运行 `npm run dist`。
-3. 将 `release/` 中的 Windows 安装包、便携版和 zip 包上传到 GitHub Release。
+3. 将 `release/` 中的 Windows 安装包和 zip 包上传到 GitHub Release。
 
 如果本机已经通过 `gh auth login` 登录 GitHub，也可以直接运行：
 

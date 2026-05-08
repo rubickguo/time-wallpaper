@@ -31,7 +31,7 @@ npm run dev
 npm run dist
 ```
 
-Build artifacts are written to the `release/` directory, including installer, portable, and zip packages.
+Build artifacts are written to the `release/` directory, including installer and zip packages.
 
 ## LLM Configuration
 
@@ -70,7 +70,7 @@ Recommended release flow:
 
 1. Update the version.
 2. Run `npm run dist`.
-3. Upload the Windows installer, portable package, and zip from `release/` to a GitHub Release.
+3. Upload the Windows installer and zip package from `release/` to a GitHub Release.
 
 If GitHub CLI is already authenticated with `gh auth login`, you can also run:
 

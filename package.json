@@ -9,7 +9,7 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && electron .\"",
     "build": "vite build",
     "start": "electron .",
-    "dist": "npm run build && electron-builder --win nsis portable zip",
+    "dist": "npm run build && electron-builder --win nsis zip",
     "release:github": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-release.ps1"
   },
   "build": {
@@ -29,12 +29,6 @@
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
           "arch": [
             "x64"
           ]

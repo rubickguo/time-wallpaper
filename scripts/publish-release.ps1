@@ -35,7 +35,6 @@ git push origin $tag
 
 $assets = @(
   "release/时间壁纸 Setup $Version.exe",
-  "release/时间壁纸 $Version.exe",
   "release/时间壁纸-$Version-win.zip"
 ) | Where-Object { Test-Path $_ }
 
@@ -48,7 +47,6 @@ Windows release $tag.
 
 Downloads:
 - Setup installer
-- Portable app
 - Zip package
 "@
 

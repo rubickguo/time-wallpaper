@@ -9,6 +9,20 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gi
 const WALLPAPER_TARGET_WIDTH = 3840;
 const WALLPAPER_TARGET_HEIGHT = 2160;
 const WALLPAPER_TARGET_PIXELS = WALLPAPER_TARGET_WIDTH * WALLPAPER_TARGET_HEIGHT;
+const MAX_RENDERER_PHOTOS = 500;
+
+// Some Windows machines freeze Electron windows in packaged builds because of
+// GPU driver or shader-cache issues. The app mostly renders still images, so
+// software compositing is a safer default for release builds.
+app.disableHardwareAcceleration();
+
+// electron-builder's portable target is a self-extracting launcher. If a
+// second portable launch hits Electron's single-instance lock, the extracted
+// child exits while the launcher can keep waiting, which looks like a frozen
+// release executable. Keep single-instance behavior for installed/zip builds,
+// but let portable launches open independently.
+const isPortableBuild = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+const hasSingleInstanceLock = isPortableBuild || app.requestSingleInstanceLock();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -147,6 +161,19 @@ function publicPhotos(photos) {
   return photos.map(publicPhoto);
 }
 
+function publicPhotoPreviewList(photos) {
+  return publicPhotos(photos.slice(0, MAX_RENDERER_PHOTOS));
+}
+
+function analysesForUi(photos) {
+  const ids = new Set(photos.map((photo) => photo.id));
+  const result = {};
+  for (const id of ids) {
+    if (data.analyses[id]) result[id] = data.analyses[id];
+  }
+  return result;
+}
+
 function mimeFromPath(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".png") return "image/png";
@@ -222,6 +249,20 @@ function sendWorkflowStatus(message) {
   }
 }
 
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.moveTop();
+  mainWindow.focus();
+  mainWindow.setAlwaysOnTop(true, "screen-saver");
+  setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.focus();
+  }, 250);
+}
+
 function yieldToEventLoop() {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -233,6 +274,7 @@ function createWindow() {
     height: 840,
     minWidth: 760,
     minHeight: 560,
+    show: false,
     backgroundColor: "#f7f3ec",
     title: "时间壁纸",
     autoHideMenuBar: true,
@@ -247,6 +289,20 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     }
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+  }, 5000);
+
+  mainWindow.on("unresponsive", () => {
+    sendWorkflowStatus("窗口暂时无响应，正在等待当前任务完成。");
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -2185,14 +2241,19 @@ async function setWallpaperCycleEnabled(enabled) {
   return wallpaperCycleStatus();
 }
 
-ipcMain.handle("app:get-state", async () => ({
-  folders: data.folders,
-  photos: publicPhotos(data.photos),
-  analyses: data.analyses,
-  config: { ...data.config, apiKey: data.config.apiKey ? "********" : "" },
-  dailyTen: publicPhotos(selectDailyTen()),
-  wallpaperCycle: wallpaperCycleStatus()
-}));
+ipcMain.handle("app:get-state", async () => {
+  const previewPhotos = publicPhotoPreviewList(data.photos);
+  const dailyTen = publicPhotos(selectDailyTen());
+  return {
+    folders: data.folders,
+    photoCount: data.photos.length,
+    photos: previewPhotos,
+    analyses: analysesForUi([...previewPhotos, ...dailyTen]),
+    config: { ...data.config, apiKey: data.config.apiKey ? "********" : "" },
+    dailyTen,
+    wallpaperCycle: wallpaperCycleStatus()
+  };
+});
 
 ipcMain.handle("folders:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -2228,7 +2289,14 @@ ipcMain.handle("photos:scan", async (_event, folders) => {
   }));
   data.folders = selected;
   saveData();
-  return { photos: publicPhotos(data.photos), dailyTen: publicPhotos(selectDailyTen()) };
+  const previewPhotos = publicPhotoPreviewList(data.photos);
+  const dailyTen = publicPhotos(selectDailyTen());
+  return {
+    photos: previewPhotos,
+    photoCount: data.photos.length,
+    analyses: analysesForUi([...previewPhotos, ...dailyTen]),
+    dailyTen
+  };
 });
 
 ipcMain.handle("config:save", async (_event, config) => {
@@ -2264,18 +2332,34 @@ ipcMain.handle("wallpaper:set", async (_event, photoId) => {
 
 ipcMain.handle("wallpaper:cycle-set", async (_event, enabled) => setWallpaperCycleEnabled(Boolean(enabled)));
 
-app.whenReady().then(() => {
-  loadData();
-  registerPhotoProtocol();
-  createWindow();
-  if (data.config.wallpaperCycleEnabled) {
-    applyWallpaperCycleStep({ next: false }).catch((error) => {
-      sendWorkflowStatus(`桌面循环恢复失败：${error.message}`);
-    });
-  }
-  scheduleWallpaperCycle();
-});
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    focusMainWindow();
+  });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      return;
+    }
+    focusMainWindow();
+  });
+
+  app.whenReady().then(() => {
+    loadData();
+    registerPhotoProtocol();
+    createWindow();
+    if (data.config.wallpaperCycleEnabled) {
+      applyWallpaperCycleStep({ next: false }).catch((error) => {
+        sendWorkflowStatus(`桌面循环恢复失败：${error.message}`);
+      });
+    }
+    scheduleWallpaperCycle();
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+}

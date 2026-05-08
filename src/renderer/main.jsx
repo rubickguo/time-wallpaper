@@ -26,7 +26,7 @@ import "./styles.css";
 const api = window.timeWallpaper;
 
 function metricText(state) {
-  const count = state.photos.length;
+  const count = state.photoCount ?? state.photos.length;
   if (count === 0) return "还没有旧照片进入时间线";
   return `${count} 张照片已进入时间线`;
 }
@@ -35,6 +35,7 @@ function App() {
   const [state, setState] = useState({
     folders: [],
     photos: [],
+    photoCount: 0,
     analyses: {},
     dailyTen: [],
     config: {},
@@ -51,9 +52,13 @@ function App() {
   const openingTimers = useRef([]);
 
   async function refresh() {
-    const next = await api.getState();
-    setState(next);
-    setConfigDraft(next.config || {});
+    try {
+      const next = await api.getState();
+      setState(next);
+      setConfigDraft(next.config || {});
+    } catch (error) {
+      setMessage(error?.message || "启动状态读取失败，请重启应用再试。");
+    }
   }
 
   useEffect(() => {
@@ -101,6 +106,7 @@ function App() {
         ...old,
         folders,
         photos: [],
+        photoCount: 0,
         analyses: {},
         dailyTen: []
       }));
@@ -109,7 +115,7 @@ function App() {
       const next = await api.getState();
       setState((old) => ({ ...old, folders: next.folders, photos: next.photos, analyses: {}, dailyTen: [] }));
       setConfigDraft(next.config || {});
-      setMessage(`找到 ${next.photos.length} 张照片。正在给那年今日的十个瞬间写来信。`);
+      setMessage(`找到 ${next.photoCount ?? next.photos.length} 张照片。正在给那年今日的十个瞬间写来信。`);
       const selectedIds = (next.dailyTen || []).map((photo) => photo.id);
       if (selectedIds.length === 0) {
         setMessage("这个文件夹里还没有可用的旧日来信照片。");
@@ -146,7 +152,7 @@ function App() {
       const next = await api.getState();
       setState((old) => ({ ...old, ...next, analyses: {}, dailyTen: [] }));
       setConfigDraft(next.config || {});
-      setMessage(`扫描完成，找到 ${next.photos.length} 张照片。正在给那年今日的十个瞬间写来信。`);
+      setMessage(`扫描完成，找到 ${next.photoCount ?? next.photos.length} 张照片。正在给那年今日的十个瞬间写来信。`);
       const selectedIds = (next.dailyTen || []).map((photo) => photo.id);
       if (selectedIds.length === 0) {
         setMessage("这个文件夹里还没有可用的旧日来信照片。");
@@ -169,7 +175,7 @@ function App() {
   }
 
   async function analyzeDailyTen(options = {}) {
-    if (state.photos.length === 0) return false;
+    if ((state.photoCount ?? state.photos.length) === 0) return false;
     const force = Boolean(options.force);
     const requireAll = Boolean(options.requireAll);
     setBusy(true);
