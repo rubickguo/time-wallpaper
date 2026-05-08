@@ -25,6 +25,13 @@ import "./styles.css";
 
 const api = window.timeWallpaper;
 
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function metricText(state) {
   const count = state.photoCount ?? state.photos.length;
   if (count === 0) return "还没有旧照片进入时间线";
@@ -39,6 +46,7 @@ function App() {
     analyses: {},
     dailyTen: [],
     config: {},
+    todayKey: localDateKey(),
     wallpaperCycle: { enabled: false, index: 0, intervalMs: 3600000 }
   });
   const [active, setActive] = useState("letter");
@@ -50,14 +58,48 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [configDraft, setConfigDraft] = useState({});
   const openingTimers = useRef([]);
+  const stateRef = useRef(state);
+  const dayKeyRef = useRef(localDateKey());
+  const dayRefreshRef = useRef(false);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   async function refresh() {
     try {
       const next = await api.getState();
+      dayKeyRef.current = next.todayKey || localDateKey();
       setState(next);
       setConfigDraft(next.config || {});
     } catch (error) {
       setMessage(error?.message || "启动状态读取失败，请重启应用再试。");
+    }
+  }
+
+  async function refreshIfDayChanged() {
+    const nextDay = localDateKey();
+    if (dayRefreshRef.current || dayKeyRef.current === nextDay) return;
+    dayRefreshRef.current = true;
+    setBusy(true);
+    setReaderOpen(false);
+    setLetterOpening(false);
+    setReaderIndex(0);
+    setState((old) => ({ ...old, dailyTen: [], analyses: {} }));
+    setMessage("新的一天到了，正在重新翻找今天的回声。");
+    try {
+      if (stateRef.current.folders.length > 0) {
+        await api.prepareDailyLetter({ force: false });
+      }
+      await refresh();
+      setMessage("今天的旧日来信已经换新。");
+    } catch (error) {
+      await refresh();
+      setMessage(error?.message || "新一天的旧日来信还没有写好，请检查 LLM 设置后重试。");
+    } finally {
+      dayKeyRef.current = nextDay;
+      dayRefreshRef.current = false;
+      setBusy(false);
     }
   }
 
@@ -69,6 +111,21 @@ function App() {
     return () => {
       openingTimers.current.forEach((timer) => clearTimeout(timer));
       unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(refreshIfDayChanged, 60000);
+    const onFocus = () => refreshIfDayChanged();
+    const onVisibility = () => {
+      if (!document.hidden) refreshIfDayChanged();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 

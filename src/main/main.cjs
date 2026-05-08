@@ -9,7 +9,7 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gi
 const WALLPAPER_TARGET_WIDTH = 3840;
 const WALLPAPER_TARGET_HEIGHT = 2160;
 const WALLPAPER_TARGET_PIXELS = WALLPAPER_TARGET_WIDTH * WALLPAPER_TARGET_HEIGHT;
-const MAX_RENDERER_PHOTOS = 500;
+const MAX_RENDERER_PHOTOS = 160;
 
 // Some Windows machines freeze Electron windows in packaged builds because of
 // GPU driver or shader-cache issues. The app mostly renders still images, so
@@ -267,6 +267,13 @@ function yieldToEventLoop() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function createWindow() {
   Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
@@ -499,12 +506,17 @@ async function readPhotoExif(filePath) {
     meta = {};
   }
 
-  let size = { width: null, height: null };
-  try {
-    const image = nativeImage.createFromPath(filePath);
-    if (!image.isEmpty()) size = image.getSize();
-  } catch {
-    size = { width: null, height: null };
+  let size = {
+    width: Number(meta.ImageWidth || meta.ExifImageWidth || meta.PixelXDimension || meta.SourceImageWidth || 0) || null,
+    height: Number(meta.ImageHeight || meta.ExifImageHeight || meta.PixelYDimension || meta.SourceImageHeight || 0) || null
+  };
+  if (!size.width || !size.height) {
+    try {
+      const image = nativeImage.createFromPath(filePath);
+      if (!image.isEmpty()) size = image.getSize();
+    } catch {
+      size = { width: null, height: null };
+    }
   }
 
   const make = String(meta.Make || "").trim();
@@ -2251,6 +2263,7 @@ ipcMain.handle("app:get-state", async () => {
     analyses: analysesForUi([...previewPhotos, ...dailyTen]),
     config: { ...data.config, apiKey: data.config.apiKey ? "********" : "" },
     dailyTen,
+    todayKey: localDateKey(),
     wallpaperCycle: wallpaperCycleStatus()
   };
 });
@@ -2295,7 +2308,8 @@ ipcMain.handle("photos:scan", async (_event, folders) => {
     photos: previewPhotos,
     photoCount: data.photos.length,
     analyses: analysesForUi([...previewPhotos, ...dailyTen]),
-    dailyTen
+    dailyTen,
+    todayKey: localDateKey()
   };
 });
 
