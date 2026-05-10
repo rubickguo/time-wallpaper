@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("timeWallpaper", {
   getState: () => ipcRenderer.invoke("app:get-state"),
   pickFolders: () => ipcRenderer.invoke("folders:pick"),
   scanPhotos: (folders) => ipcRenderer.invoke("photos:scan", folders),
+  refreshPhotosIfChanged: () => ipcRenderer.invoke("photos:refresh-if-changed"),
   saveConfig: (config) => ipcRenderer.invoke("config:save", config),
   analyzePhoto: (photoId) => ipcRenderer.invoke("llm:analyze-photo", photoId),
   analyzeDailyTen: (photoIds, options) => ipcRenderer.invoke("llm:analyze-daily-ten", photoIds, options),

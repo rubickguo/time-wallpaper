@@ -142,6 +142,7 @@ let data = {
   folders: [],
   photos: [],
   analyses: {},
+  librarySignature: "",
   config: { ...DEFAULT_CONFIG }
 };
 
@@ -173,6 +174,23 @@ function analysesForUi(photos) {
     if (data.analyses[id]) result[id] = data.analyses[id];
   }
   return result;
+}
+
+function appStatePayload(extra = {}) {
+  data.config.autoLaunchEnabled = readAutoLaunchEnabled();
+  const previewPhotos = publicPhotoPreviewList(data.photos);
+  const dailyTen = publicPhotos(selectDailyTen());
+  return {
+    folders: data.folders,
+    photoCount: data.photos.length,
+    photos: previewPhotos,
+    analyses: analysesForUi([...previewPhotos, ...dailyTen]),
+    config: { ...data.config, apiKey: data.config.apiKey ? "********" : "" },
+    dailyTen,
+    todayKey: localDateKey(),
+    wallpaperCycle: wallpaperCycleStatus(),
+    ...extra
+  };
 }
 
 function mimeFromPath(filePath) {
@@ -222,6 +240,7 @@ function loadData() {
         folders: Array.isArray(loaded.folders) ? loaded.folders : [],
         photos: Array.isArray(loaded.photos) ? loaded.photos : [],
         analyses: loaded.analyses || {},
+        librarySignature: loaded.librarySignature || "",
         config: { ...DEFAULT_CONFIG, ...(loaded.config || {}) }
       };
       for (const [photoId, analysis] of Object.entries(data.analyses)) {
@@ -657,6 +676,80 @@ async function walkPhotos(folder) {
   }
 
   return found;
+}
+
+function buildLibrarySignature(folders, entries) {
+  const hash = crypto.createHash("sha1");
+  const normalizedFolders = Array.from(new Set((folders || []).map((folder) => path.resolve(folder).toLowerCase()))).sort();
+  let count = 0;
+  let totalSize = 0;
+  let newestMtime = 0;
+
+  hash.update(normalizedFolders.join("|"));
+  for (const entry of entries.sort((a, b) => String(a.path).localeCompare(String(b.path)))) {
+    const normalizedPath = path.resolve(entry.path).toLowerCase();
+    const size = Number(entry.size || 0);
+    const modified = Math.round(Number(entry.lastModified || entry.mtimeMs || 0));
+    count += 1;
+    totalSize += size;
+    newestMtime = Math.max(newestMtime, modified);
+    hash.update(`\n${normalizedPath}|${size}|${modified}`);
+  }
+
+  return JSON.stringify({
+    folders: normalizedFolders,
+    count,
+    totalSize,
+    newestMtime,
+    digest: hash.digest("hex")
+  });
+}
+
+async function readLibrarySignature(folders) {
+  const entriesForSignature = [];
+  for (const folder of folders || []) {
+    const stack = [folder];
+    let visitedFiles = 0;
+    while (stack.length > 0) {
+      const current = stack.pop();
+      let entries = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (!entry.isFile() || !IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+        try {
+          visitedFiles += 1;
+          if (visitedFiles % 500 === 0) await yieldToEventLoop();
+          const stat = fs.statSync(fullPath);
+          entriesForSignature.push({
+            path: fullPath,
+            size: stat.size,
+            lastModified: stat.mtimeMs
+          });
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+  return buildLibrarySignature(folders, entriesForSignature);
+}
+
+function scannedLibrarySignature(folders, photos) {
+  return buildLibrarySignature(folders, photos.map((photo) => ({
+    path: photo.path,
+    size: photo.size,
+    lastModified: photo.lastModified
+  })));
 }
 
 function dateRelationship(photoDate) {
@@ -2325,20 +2418,29 @@ async function setWallpaperCycleEnabled(enabled) {
   return wallpaperCycleStatus();
 }
 
+async function scanPhotoFolders(selected) {
+  const scanned = (await Promise.all(selected.map((folder) => walkPhotos(folder)))).flat();
+  const selectedSet = new Set(selected.map((folder) => path.resolve(folder).toLowerCase()));
+  const existingById = new Map(
+    data.photos
+      .filter((photo) => selectedSet.has(path.resolve(photo.folder).toLowerCase()))
+      .map((photo) => [photo.id, photo])
+  );
+  data.photos = scanned.map((photo) => ({
+    ...photo,
+    exif: photo.exif || existingById.get(photo.id)?.exif || {},
+    localQuality: existingById.get(photo.id)?.localQuality || photo.localQuality || null,
+    localScore: existingById.get(photo.id)?.localScore || photo.localScore || localPhotoScores(photo),
+    favorite: existingById.get(photo.id)?.favorite || false,
+    hidden: existingById.get(photo.id)?.hidden || false
+  }));
+  data.folders = selected;
+  data.librarySignature = scannedLibrarySignature(selected, data.photos);
+  saveData();
+}
+
 ipcMain.handle("app:get-state", async () => {
-  data.config.autoLaunchEnabled = readAutoLaunchEnabled();
-  const previewPhotos = publicPhotoPreviewList(data.photos);
-  const dailyTen = publicPhotos(selectDailyTen());
-  return {
-    folders: data.folders,
-    photoCount: data.photos.length,
-    photos: previewPhotos,
-    analyses: analysesForUi([...previewPhotos, ...dailyTen]),
-    config: { ...data.config, apiKey: data.config.apiKey ? "********" : "" },
-    dailyTen,
-    todayKey: localDateKey(),
-    wallpaperCycle: wallpaperCycleStatus()
-  };
+  return appStatePayload();
 });
 
 ipcMain.handle("folders:pick", async () => {
@@ -2359,31 +2461,21 @@ ipcMain.handle("folders:pick", async () => {
 
 ipcMain.handle("photos:scan", async (_event, folders) => {
   const selected = Array.isArray(folders) && folders.length > 0 ? folders : data.folders;
-  const scanned = (await Promise.all(selected.map((folder) => walkPhotos(folder)))).flat();
-  const selectedSet = new Set(selected.map((folder) => path.resolve(folder).toLowerCase()));
-  const existingById = new Map(
-    data.photos
-      .filter((photo) => selectedSet.has(path.resolve(photo.folder).toLowerCase()))
-      .map((photo) => [photo.id, photo])
-  );
-  data.photos = scanned.map((photo) => ({
-    ...photo,
-    exif: photo.exif || existingById.get(photo.id)?.exif || {},
-    localScore: photo.localScore || localPhotoScores(photo),
-    favorite: existingById.get(photo.id)?.favorite || false,
-    hidden: existingById.get(photo.id)?.hidden || false
-  }));
-  data.folders = selected;
-  saveData();
-  const previewPhotos = publicPhotoPreviewList(data.photos);
-  const dailyTen = publicPhotos(selectDailyTen());
-  return {
-    photos: previewPhotos,
-    photoCount: data.photos.length,
-    analyses: analysesForUi([...previewPhotos, ...dailyTen]),
-    dailyTen,
-    todayKey: localDateKey()
-  };
+  await scanPhotoFolders(selected);
+  return appStatePayload({ libraryChanged: true });
+});
+
+ipcMain.handle("photos:refresh-if-changed", async () => {
+  if (!Array.isArray(data.folders) || data.folders.length === 0) {
+    return appStatePayload({ libraryChanged: false });
+  }
+  const currentSignature = await readLibrarySignature(data.folders);
+  if (currentSignature === data.librarySignature) {
+    return appStatePayload({ libraryChanged: false });
+  }
+  sendWorkflowStatus("检测到照片文件夹有更新，正在重新筛选今天的十张。");
+  await scanPhotoFolders(data.folders);
+  return appStatePayload({ libraryChanged: true });
 });
 
 ipcMain.handle("config:save", async (_event, config) => {

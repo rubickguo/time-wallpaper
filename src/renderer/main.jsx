@@ -62,6 +62,8 @@ function App() {
   const dayKeyRef = useRef(localDateKey());
   const dayRefreshRef = useRef(false);
   const dailyPrepareRef = useRef(false);
+  const libraryRefreshRef = useRef(false);
+  const lastLibraryCheckRef = useRef(0);
 
   useEffect(() => {
     stateRef.current = state;
@@ -97,13 +99,54 @@ function App() {
     }
   }
 
+  async function refreshLibraryIfChanged(snapshot = stateRef.current, options = {}) {
+    if (!api.refreshPhotosIfChanged || libraryRefreshRef.current || dailyPrepareRef.current || dayRefreshRef.current) return;
+    if (!snapshot?.folders?.length) return;
+    const now = Date.now();
+    if (!options.force && now - lastLibraryCheckRef.current < 180000) return;
+    lastLibraryCheckRef.current = now;
+    libraryRefreshRef.current = true;
+    setBusy(true);
+    setReaderOpen(false);
+    setLetterOpening(false);
+    setMessage("正在检查照片文件夹有没有新的回声。");
+    try {
+      const next = await api.refreshPhotosIfChanged();
+      setState(next);
+      setConfigDraft(next.config || {});
+      if (!next.libraryChanged) {
+        await ensureDailyLetterPrepared(next);
+        return;
+      }
+      if ((next.dailyTen || []).length === 0) {
+        setMessage("照片库已更新，但还没有可用的旧日来信照片。");
+        return;
+      }
+      setState((old) => ({ ...old, ...next, analyses: {}, dailyTen: [] }));
+      setMessage("照片库已更新，正在重新筛选十张并让 AI 写好文案。");
+      await api.prepareDailyLetter({ force: true });
+      const ready = await api.getState();
+      dayKeyRef.current = ready.todayKey || localDateKey();
+      setState(ready);
+      setConfigDraft(ready.config || {});
+      setMessage("新的照片已经写好今天的旧日来信。");
+    } catch (error) {
+      setMessage(error?.message || "照片库已更新，但 AI 文案还没有生成成功。");
+    } finally {
+      libraryRefreshRef.current = false;
+      setBusy(false);
+    }
+  }
+
   async function refresh(options = {}) {
     try {
       const next = await api.getState();
       dayKeyRef.current = next.todayKey || localDateKey();
       setState(next);
       setConfigDraft(next.config || {});
-      if (options.prepareMissing !== false) {
+      if (options.checkLibrary) {
+        refreshLibraryIfChanged(next, { force: true });
+      } else if (options.prepareMissing !== false) {
         ensureDailyLetterPrepared(next);
       }
     } catch (error) {
@@ -138,7 +181,7 @@ function App() {
   }
 
   useEffect(() => {
-    refresh({ prepareMissing: true });
+    refresh({ prepareMissing: true, checkLibrary: true });
     const unsubscribe = api.onWorkflowStatus?.((nextMessage) => {
       setMessage(nextMessage);
     });
@@ -149,10 +192,19 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const timer = setInterval(refreshIfDayChanged, 60000);
-    const onFocus = () => refreshIfDayChanged();
+    const timer = setInterval(() => {
+      refreshIfDayChanged();
+      refreshLibraryIfChanged();
+    }, 60000);
+    const onFocus = () => {
+      refreshIfDayChanged();
+      refreshLibraryIfChanged();
+    };
     const onVisibility = () => {
-      if (!document.hidden) refreshIfDayChanged();
+      if (!document.hidden) {
+        refreshIfDayChanged();
+        refreshLibraryIfChanged();
+      }
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibility);
