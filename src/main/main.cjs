@@ -46,7 +46,7 @@ const DEFAULT_CONFIG = {
   privacyMode: "feature_only",
   captionStyle: "克制、诗意、温柔",
   dailyLimit: 10,
-  candidateLimit: 24,
+  candidateLimit: 40,
   wallpaperCycleEnabled: false,
   wallpaperCycleIndex: 0,
   wallpaperCycleIntervalMs: 3600000,
@@ -810,6 +810,15 @@ function getLocalScore(photo) {
   return photo.localScore;
 }
 
+function hasMeasuredLocalQuality(photo) {
+  return Boolean(photo.localQuality && Number.isFinite(Number(photo.localQuality.sharpness)));
+}
+
+function isLocallySafeCandidate(photo) {
+  const local = getLocalScore(photo);
+  return Number(local.safety) >= 60 || !hasMeasuredLocalQuality(photo);
+}
+
 function ensureLocalQuality(photo) {
   if (!photo.localQuality || !Number.isFinite(Number(photo.localQuality.sharpness))) {
     photo.localQuality = estimateLocalImageQuality(photo.path);
@@ -830,6 +839,12 @@ function combinedPhotoScore(photo) {
   const resolution = Number(local.resolution ?? wallpaperResolutionScore(photo));
   if (safety < 60) return -1;
   return Math.round(wallpaper * 0.44 + memory * 0.27 + safety * 0.12 + resolution * 0.17);
+}
+
+function selectionPhotoScore(photo) {
+  const combined = combinedPhotoScore(photo);
+  if (Number.isFinite(combined) && combined >= 0) return combined;
+  return localCandidateScore(photo);
 }
 
 function buildStructuredPhotoInput(photo) {
@@ -1444,7 +1459,7 @@ ${JSON.stringify(photoInputs, null, 2)}`;
 
 function localCandidateScore(photo) {
   const local = getLocalScore(photo);
-  if (Number(local.safety) < 60) return -1;
+  if (Number(local.safety) < 60 && hasMeasuredLocalQuality(photo)) return -1;
   const todayBoost = dateProximityBoost(photo.date);
   return Math.round(
     local.wallpaper * 0.34
@@ -1493,7 +1508,7 @@ function selectScoreCandidates(limit, options = {}) {
   const roughLimit = Math.min(datePool.length, Math.max(limit * 4, 80));
   const roughCandidates = datePool
     .filter((photo) => !photo.hidden)
-    .filter((photo) => getLocalScore(photo).safety >= 60)
+    .filter((photo) => isLocallySafeCandidate(photo))
     .sort((a, b) => {
       const aScore = localCandidateScore(a);
       const bScore = localCandidateScore(b);
@@ -1578,7 +1593,7 @@ async function prepareDailyLetter(options = {}) {
   const candidateLimit = scoreAll
     ? data.photos.length
     : Math.min(
-        Math.max(dailyLimit * 2, Number.isFinite(configuredCandidateLimit) ? configuredCandidateLimit : DEFAULT_CONFIG.candidateLimit),
+        Math.max(dailyLimit * 4, Number.isFinite(configuredCandidateLimit) ? configuredCandidateLimit : DEFAULT_CONFIG.candidateLimit),
         40,
         data.photos.length
       );
@@ -1682,15 +1697,17 @@ async function analyzePhoto(photoId) {
 function selectDailyTen() {
   const visible = data.photos.filter((photo) => !photo.hidden);
   const dailyLimit = Number(data.config.dailyLimit || 10);
-  const datePool = selectDateProximityPool(visible, Math.min(dailyLimit, visible.length));
-  const modelScored = datePool.filter((photo) => hasModelScore(photo.id) && data.analyses[photo.id]?.source !== "llm_visual_score");
-  const pool = modelScored.length >= dailyLimit ? modelScored : selectScoreCandidates(dailyLimit, { source: datePool });
+  if (visible.length === 0 || dailyLimit <= 0) return [];
+  const targetCandidateLimit = Math.min(visible.length, Math.max(dailyLimit * 4, 40));
+  const datePool = selectDateProximityPool(visible, targetCandidateLimit);
+  const candidateLimit = Math.min(datePool.length, targetCandidateLimit);
+  const pool = selectScoreCandidates(candidateLimit, { source: datePool });
   const finalPool = pool.length >= dailyLimit ? pool : visible;
   const todayKey = localDateKey();
   const ranked = finalPool
     .map((photo) => ({
       photo,
-      score: combinedPhotoScore(photo),
+      score: selectionPhotoScore(photo),
       today: dateRelationship(photo.date) === "那年今日" ? 1 : 0
     }))
     .sort((a, b) => {
@@ -1699,12 +1716,12 @@ function selectDailyTen() {
       return b.photo.lastModified - a.photo.lastModified;
     });
 
-  const varietyPoolSize = Math.min(ranked.length, Math.max(dailyLimit * 3, 24));
+  const varietyPoolSize = Math.min(ranked.length, Math.max(dailyLimit * 4, 40));
   const varietyPool = ranked.slice(0, varietyPoolSize);
   return varietyPool
     .sort((a, b) => {
-      const aVariety = dailyVarietyScore(a.photo, todayKey) * 20;
-      const bVariety = dailyVarietyScore(b.photo, todayKey) * 20;
+      const aVariety = dailyVarietyScore(a.photo, todayKey) * 36;
+      const bVariety = dailyVarietyScore(b.photo, todayKey) * 36;
       const aScore = a.score + aVariety;
       const bScore = b.score + bVariety;
       if (a.today !== b.today && Math.abs(aScore - bScore) < 18) return b.today - a.today;

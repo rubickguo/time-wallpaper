@@ -61,17 +61,51 @@ function App() {
   const stateRef = useRef(state);
   const dayKeyRef = useRef(localDateKey());
   const dayRefreshRef = useRef(false);
+  const dailyPrepareRef = useRef(false);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  async function refresh() {
+  function needsDailyPreparation(snapshot) {
+    return Boolean(
+      snapshot?.folders?.length
+      && snapshot?.dailyTen?.length
+      && snapshot.dailyTen.some((photo) => !snapshot.analyses?.[photo.id]?.captions?.[0]?.text)
+    );
+  }
+
+  async function ensureDailyLetterPrepared(snapshot) {
+    if (dailyPrepareRef.current || dayRefreshRef.current || !needsDailyPreparation(snapshot)) return;
+    dailyPrepareRef.current = true;
+    setBusy(true);
+    setReaderOpen(false);
+    setLetterOpening(false);
+    setMessage("正在给今天的十张照片评分和写信，写好前先不拆开旧日来信。");
+    try {
+      await api.prepareDailyLetter({ force: false });
+      const ready = await api.getState();
+      dayKeyRef.current = ready.todayKey || localDateKey();
+      setState(ready);
+      setConfigDraft(ready.config || {});
+      setMessage("今天的旧日来信已经写好。");
+    } catch (error) {
+      setMessage(error?.message || "今天的旧日来信还没有写好，请检查 LLM 设置后重试。");
+    } finally {
+      dailyPrepareRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function refresh(options = {}) {
     try {
       const next = await api.getState();
       dayKeyRef.current = next.todayKey || localDateKey();
       setState(next);
       setConfigDraft(next.config || {});
+      if (options.prepareMissing !== false) {
+        ensureDailyLetterPrepared(next);
+      }
     } catch (error) {
       setMessage(error?.message || "启动状态读取失败，请重启应用再试。");
     }
@@ -91,10 +125,10 @@ function App() {
       if (stateRef.current.folders.length > 0) {
         await api.prepareDailyLetter({ force: false });
       }
-      await refresh();
+      await refresh({ prepareMissing: false });
       setMessage("今天的旧日来信已经换新。");
     } catch (error) {
-      await refresh();
+      await refresh({ prepareMissing: false });
       setMessage(error?.message || "新一天的旧日来信还没有写好，请检查 LLM 设置后重试。");
     } finally {
       dayKeyRef.current = nextDay;
@@ -104,7 +138,7 @@ function App() {
   }
 
   useEffect(() => {
-    refresh();
+    refresh({ prepareMissing: true });
     const unsubscribe = api.onWorkflowStatus?.((nextMessage) => {
       setMessage(nextMessage);
     });
@@ -173,12 +207,11 @@ function App() {
       setState((old) => ({ ...old, folders: next.folders, photos: next.photos, analyses: {}, dailyTen: [] }));
       setConfigDraft(next.config || {});
       setMessage(`找到 ${next.photoCount ?? next.photos.length} 张照片。正在给那年今日的十个瞬间写来信。`);
-      const selectedIds = (next.dailyTen || []).map((photo) => photo.id);
-      if (selectedIds.length === 0) {
+      if ((next.dailyTen || []).length === 0) {
         setMessage("这个文件夹里还没有可用的旧日来信照片。");
         return;
       }
-      await api.analyzeDailyTen(selectedIds, { force: true });
+      await api.prepareDailyLetter({ force: true });
       const ready = await api.getState();
       const readyCount = (ready.dailyTen || []).filter((photo) => ready.analyses?.[photo.id]?.captions?.[0]?.text).length;
       if (readyCount !== (ready.dailyTen || []).length) {
@@ -210,12 +243,11 @@ function App() {
       setState((old) => ({ ...old, ...next, analyses: {}, dailyTen: [] }));
       setConfigDraft(next.config || {});
       setMessage(`扫描完成，找到 ${next.photoCount ?? next.photos.length} 张照片。正在给那年今日的十个瞬间写来信。`);
-      const selectedIds = (next.dailyTen || []).map((photo) => photo.id);
-      if (selectedIds.length === 0) {
+      if ((next.dailyTen || []).length === 0) {
         setMessage("这个文件夹里还没有可用的旧日来信照片。");
         return;
       }
-      await api.analyzeDailyTen(selectedIds, { force: true });
+      await api.prepareDailyLetter({ force: true });
       const ready = await api.getState();
       const readyCount = (ready.dailyTen || []).filter((photo) => ready.analyses?.[photo.id]?.captions?.[0]?.text).length;
       if (readyCount !== (ready.dailyTen || []).length) {
