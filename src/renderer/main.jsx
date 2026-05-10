@@ -64,6 +64,7 @@ function App() {
   const dailyPrepareRef = useRef(false);
   const libraryRefreshRef = useRef(false);
   const lastLibraryCheckRef = useRef(0);
+  const nextDayPrepareRef = useRef(false);
 
   useEffect(() => {
     stateRef.current = state;
@@ -91,11 +92,24 @@ function App() {
       setState(ready);
       setConfigDraft(ready.config || {});
       setMessage("今天的旧日来信已经写好。");
+      warmNextDayLetter(ready);
     } catch (error) {
       setMessage(error?.message || "今天的旧日来信还没有写好，请检查 LLM 设置后重试。");
     } finally {
       dailyPrepareRef.current = false;
       setBusy(false);
+    }
+  }
+
+  async function warmNextDayLetter(snapshot = stateRef.current) {
+    if (!api.prepareNextDayLetter || nextDayPrepareRef.current || !snapshot?.folders?.length || !snapshot?.dailyTen?.length) return;
+    nextDayPrepareRef.current = true;
+    try {
+      await api.prepareNextDayLetter({ force: false });
+    } catch (error) {
+      setMessage(error?.message || "明天的旧日来信还没有提前准备成功。");
+    } finally {
+      nextDayPrepareRef.current = false;
     }
   }
 
@@ -115,7 +129,8 @@ function App() {
       setState(next);
       setConfigDraft(next.config || {});
       if (!next.libraryChanged) {
-        await ensureDailyLetterPrepared(next);
+        if (needsDailyPreparation(next)) await ensureDailyLetterPrepared(next);
+        else warmNextDayLetter(next);
         return;
       }
       if ((next.dailyTen || []).length === 0) {
@@ -130,6 +145,7 @@ function App() {
       setState(ready);
       setConfigDraft(ready.config || {});
       setMessage("新的照片已经写好今天的旧日来信。");
+      warmNextDayLetter(ready);
     } catch (error) {
       setMessage(error?.message || "照片库已更新，但 AI 文案还没有生成成功。");
     } finally {
@@ -147,7 +163,8 @@ function App() {
       if (options.checkLibrary) {
         refreshLibraryIfChanged(next, { force: true });
       } else if (options.prepareMissing !== false) {
-        ensureDailyLetterPrepared(next);
+        if (needsDailyPreparation(next)) ensureDailyLetterPrepared(next);
+        else warmNextDayLetter(next);
       }
     } catch (error) {
       setMessage(error?.message || "启动状态读取失败，请重启应用再试。");
@@ -170,6 +187,7 @@ function App() {
       }
       await refresh({ prepareMissing: false });
       setMessage("今天的旧日来信已经换新。");
+      warmNextDayLetter(stateRef.current);
     } catch (error) {
       await refresh({ prepareMissing: false });
       setMessage(error?.message || "新一天的旧日来信还没有写好，请检查 LLM 设置后重试。");
@@ -272,6 +290,7 @@ function App() {
       setState(ready);
       setConfigDraft(ready.config || {});
       setMessage("新的旧日来信已经写好。");
+      warmNextDayLetter(ready);
     } catch (error) {
       setMessage(error?.message || "旧日来信还没有写好，请检查 LLM 设置后重试。");
     } finally {
@@ -308,6 +327,7 @@ function App() {
       setState(ready);
       setConfigDraft(ready.config || {});
       setMessage("新的旧日来信已经写好。");
+      warmNextDayLetter(ready);
     } catch (error) {
       setMessage(error?.message || "旧日来信还没有写好，请检查 LLM 设置后重试。");
     } finally {
@@ -344,6 +364,7 @@ function App() {
       const readyCount = nextDailyTen.filter((photo) => hasCaption(photo, analyses)).length;
       if (readyCount === nextDailyTen.length) {
         setMessage("已为本地精选出的今日十张生成文案。");
+        warmNextDayLetter({ ...refreshed, dailyTen: nextDailyTen });
         return true;
       }
       setMessage(`还有 ${nextDailyTen.length - readyCount} 张没有有效 AI 文案，暂时不能拆开来信。`);

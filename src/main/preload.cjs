@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("timeWallpaper", {
   analyzePhoto: (photoId) => ipcRenderer.invoke("llm:analyze-photo", photoId),
   analyzeDailyTen: (photoIds, options) => ipcRenderer.invoke("llm:analyze-daily-ten", photoIds, options),
   prepareDailyLetter: (options) => ipcRenderer.invoke("llm:prepare-daily-letter", options),
+  prepareNextDayLetter: (options) => ipcRenderer.invoke("llm:prepare-next-day-letter", options),
   onWorkflowStatus: (callback) => {
     const listener = (_event, message) => callback(message);
     ipcRenderer.on("workflow:status", listener);

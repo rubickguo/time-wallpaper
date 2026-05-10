@@ -143,6 +143,7 @@ let data = {
   photos: [],
   analyses: {},
   librarySignature: "",
+  nextDayPrepared: null,
   config: { ...DEFAULT_CONFIG }
 };
 
@@ -241,6 +242,7 @@ function loadData() {
         photos: Array.isArray(loaded.photos) ? loaded.photos : [],
         analyses: loaded.analyses || {},
         librarySignature: loaded.librarySignature || "",
+        nextDayPrepared: loaded.nextDayPrepared || null,
         config: { ...DEFAULT_CONFIG, ...(loaded.config || {}) }
       };
       for (const [photoId, analysis] of Object.entries(data.analyses)) {
@@ -322,6 +324,17 @@ function localDateKey(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function dateFromKey(dateKey) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function shiftedLocalDateKey(days = 0, date = new Date()) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return localDateKey(next);
 }
 
 function stableHashNumber(input) {
@@ -752,8 +765,8 @@ function scannedLibrarySignature(folders, photos) {
   })));
 }
 
-function dateRelationship(photoDate) {
-  const today = new Date();
+function dateRelationship(photoDate, referenceDate = new Date()) {
+  const today = referenceDate;
   const date = new Date(`${photoDate}T00:00:00`);
   if (Number.isNaN(date.getTime())) {
     return "日期未知";
@@ -769,8 +782,8 @@ function dateRelationship(photoDate) {
   return "旧时光";
 }
 
-function dateDistanceToToday(photoDate) {
-  const today = new Date();
+function dateDistanceToToday(photoDate, referenceDate = new Date()) {
+  const today = referenceDate;
   const date = new Date(`${photoDate}T00:00:00`);
   if (Number.isNaN(date.getTime())) return 366;
   const todayDay = Math.floor((Date.UTC(2000, today.getMonth(), today.getDate()) - Date.UTC(2000, 0, 1)) / 86400000);
@@ -779,8 +792,8 @@ function dateDistanceToToday(photoDate) {
   return Math.min(diff, 366 - diff);
 }
 
-function dateProximityBoost(photoDate) {
-  const distance = dateDistanceToToday(photoDate);
+function dateProximityBoost(photoDate, referenceDate = new Date()) {
+  const distance = dateDistanceToToday(photoDate, referenceDate);
   if (distance === 0) return 34;
   if (distance <= 1) return 28;
   if (distance <= 3) return 22;
@@ -934,20 +947,21 @@ function combinedPhotoScore(photo) {
   return Math.round(wallpaper * 0.44 + memory * 0.27 + safety * 0.12 + resolution * 0.17);
 }
 
-function selectionPhotoScore(photo) {
+function selectionPhotoScore(photo, referenceDate = new Date()) {
   const combined = combinedPhotoScore(photo);
   if (Number.isFinite(combined) && combined >= 0) return combined;
-  return localCandidateScore(photo);
+  return localCandidateScore(photo, referenceDate);
 }
 
-function buildStructuredPhotoInput(photo) {
+function buildStructuredPhotoInput(photo, options = {}) {
+  const referenceDate = options.referenceDate || new Date();
   return {
     task: "caption_and_score",
     schema_version: "1.0",
     photo_id: photo.id,
     shooting_date: photo.date,
     date_confidence: photo.dateConfidence,
-    relation_to_today: dateRelationship(photo.date),
+    relation_to_today: dateRelationship(photo.date, referenceDate),
     visible_facts: ["用户选择的本地照片", "可作为壁纸候选"],
     exif: {
       camera: photo.exif?.camera || "",
@@ -1022,7 +1036,8 @@ function chooseDistinctFallback(usedCaptions, seed = 0) {
   return FALLBACK_CAPTIONS[seed % FALLBACK_CAPTIONS.length];
 }
 
-function normalizeAnalysis(photo, raw, usedCaptions = []) {
+function normalizeAnalysis(photo, raw, usedCaptions = [], options = {}) {
+  const referenceDate = options.referenceDate || new Date();
   const captions = Array.isArray(raw?.captions)
     ? raw.captions
         .map((item) => ({
@@ -1057,7 +1072,7 @@ function normalizeAnalysis(photo, raw, usedCaptions = []) {
       wallpaper: Number(raw?.score?.wallpaper_score ?? raw?.score?.wallpaper ?? 72),
       safety: Number(raw?.score?.safety_score ?? raw?.score?.safety ?? 90)
     },
-    tags: raw?.tags || [dateRelationship(photo.date), "安静", "旧时光"],
+    tags: raw?.tags || [dateRelationship(photo.date, referenceDate), "安静", "旧时光"],
     captions
   };
 }
@@ -1297,7 +1312,7 @@ async function postChatCompletionWithModelFallback(endpoint, config, messages, u
   throw lastError;
 }
 
-async function callOpenAICompatible(photo) {
+async function callOpenAICompatible(photo, options = {}) {
   const config = data.config;
   if (!config.baseUrl || !config.apiKey || !config.model) {
     throw new Error("LLM configuration is incomplete.");
@@ -1305,7 +1320,7 @@ async function callOpenAICompatible(photo) {
   assertVisionCaptionReady(config);
 
   const endpoint = buildEndpoint(config.baseUrl, config.protocol || "openai");
-  const structuredInput = buildStructuredPhotoInput(photo);
+  const structuredInput = buildStructuredPhotoInput(photo, options);
   const textPrompt = `请根据以下照片信息生成壁纸短文案和打分。必须返回严格 JSON，格式为：
 {
   "score": {
@@ -1376,7 +1391,7 @@ function hasModelScore(photoId) {
     && Number.isFinite(Number(score?.safety));
 }
 
-async function callOpenAICompatibleScore(photo) {
+async function callOpenAICompatibleScore(photo, options = {}) {
   const config = data.config;
   if (!config.baseUrl || !config.apiKey || !config.model) {
     throw new Error("LLM configuration is incomplete.");
@@ -1384,7 +1399,7 @@ async function callOpenAICompatibleScore(photo) {
   assertVisionCaptionReady(config);
 
   const endpoint = buildEndpoint(config.baseUrl, config.protocol || "openai");
-  const structuredInput = buildStructuredPhotoInput(photo);
+  const structuredInput = buildStructuredPhotoInput(photo, options);
   const textPrompt = `请只为这张照片打分，不要生成文案。必须根据图片视觉质量判断是否适合进入「旧日来信」。
 
 重点看：清晰度、失焦/手抖、曝光、主体可读性、构图、桌面壁纸适配度、回忆感、隐私和安全风险。
@@ -1429,13 +1444,14 @@ ${JSON.stringify(structuredInput, null, 2)}`;
   return parseJsonContent(text);
 }
 
-function buildBatchPhotoInput(photos) {
+function buildBatchPhotoInput(photos, options = {}) {
+  const referenceDate = options.referenceDate || new Date();
   return photos.map((photo, index) => ({
     index: index + 1,
     photo_id: photo.id,
     shooting_date: photo.date,
     date_confidence: photo.dateConfidence,
-    relation_to_today: dateRelationship(photo.date),
+    relation_to_today: dateRelationship(photo.date, referenceDate),
     visible_facts: ["用户选择的本地照片", "壁纸候选"],
     exif: {
       camera: photo.exif?.camera || "",
@@ -1456,7 +1472,7 @@ function buildBatchPhotoInput(photos) {
   }));
 }
 
-async function callOpenAICompatibleBatch(photos) {
+async function callOpenAICompatibleBatch(photos, options = {}) {
   const config = data.config;
   if (!config.baseUrl || !config.apiKey || !config.model) {
     throw new Error("LLM configuration is incomplete.");
@@ -1464,7 +1480,7 @@ async function callOpenAICompatibleBatch(photos) {
   assertVisionCaptionReady(config);
 
   const endpoint = buildEndpoint(config.baseUrl, config.protocol || "openai");
-  const photoInputs = buildBatchPhotoInput(photos);
+  const photoInputs = buildBatchPhotoInput(photos, options);
   const textPrompt = `请为以下 ${photos.length} 张旧照片生成壁纸文案和内部打分。
 
 重要：
@@ -1550,10 +1566,10 @@ ${JSON.stringify(photoInputs, null, 2)}`;
   }));
 }
 
-function localCandidateScore(photo) {
+function localCandidateScore(photo, referenceDate = new Date()) {
   const local = getLocalScore(photo);
   if (Number(local.safety) < 60 && hasMeasuredLocalQuality(photo)) return -1;
-  const todayBoost = dateProximityBoost(photo.date);
+  const todayBoost = dateProximityBoost(photo.date, referenceDate);
   return Math.round(
     local.wallpaper * 0.34
     + local.memory * 0.24
@@ -1567,10 +1583,11 @@ function localCandidateScore(photo) {
 
 function selectDateProximityPool(source, minimum, options = {}) {
   const preferResolution = options.preferResolution !== false;
+  const referenceDate = options.referenceDate || new Date();
   const visible = source.filter((photo) => !photo.hidden);
   let fallback = visible;
   for (const windowDays of [0, 1, 3, 7, 15, 31, 366]) {
-    const pool = visible.filter((photo) => dateDistanceToToday(photo.date) <= windowDays);
+    const pool = visible.filter((photo) => dateDistanceToToday(photo.date, referenceDate) <= windowDays);
     if (pool.length < minimum && windowDays !== 366) continue;
     if (!preferResolution) return pool;
 
@@ -1597,14 +1614,15 @@ function preferHighResolutionPool(photos, limit) {
 function selectScoreCandidates(limit, options = {}) {
   const useQualityCheck = Boolean(options.useQualityCheck);
   const source = Array.isArray(options.source) ? options.source : data.photos;
-  const datePool = selectDateProximityPool(source, Math.min(limit, source.length));
+  const referenceDate = options.referenceDate || new Date();
+  const datePool = selectDateProximityPool(source, Math.min(limit, source.length), { referenceDate });
   const roughLimit = Math.min(datePool.length, Math.max(limit * 4, 80));
   const roughCandidates = datePool
     .filter((photo) => !photo.hidden)
     .filter((photo) => isLocallySafeCandidate(photo))
     .sort((a, b) => {
-      const aScore = localCandidateScore(a);
-      const bScore = localCandidateScore(b);
+      const aScore = localCandidateScore(a, referenceDate);
+      const bScore = localCandidateScore(b, referenceDate);
       if (aScore !== bScore) return bScore - aScore;
       return b.lastModified - a.lastModified;
     })
@@ -1624,8 +1642,8 @@ function selectScoreCandidates(limit, options = {}) {
     });
   return preferHighResolutionPool(qualityCandidates, limit)
     .sort((a, b) => {
-      const aScore = localCandidateScore(a);
-      const bScore = localCandidateScore(b);
+      const aScore = localCandidateScore(a, referenceDate);
+      const bScore = localCandidateScore(b, referenceDate);
       if (aScore !== bScore) return bScore - aScore;
       return b.lastModified - a.lastModified;
     })
@@ -1650,13 +1668,14 @@ function clearGeneratedCaptions(photoId) {
 
 async function scorePhotosForSelection(photos, options = {}) {
   const force = Boolean(options.force);
+  const referenceDate = options.referenceDate || new Date();
   const targets = photos.filter((photo) => force || !hasModelScore(photo.id));
   if (targets.length === 0) return [];
 
   const results = [];
   for (const [index, photo] of targets.entries()) {
     sendWorkflowStatus(`正在打分中：${index + 1} / ${targets.length}。模型会先淘汰模糊和不适合做壁纸的照片。`);
-    const raw = await callOpenAICompatibleScore(photo);
+    const raw = await callOpenAICompatibleScore(photo, { referenceDate });
     const score = normalizeModelScore(raw);
     const existing = data.analyses[photo.id] || {};
     data.analyses[photo.id] = {
@@ -1677,8 +1696,11 @@ async function scorePhotosForSelection(photos, options = {}) {
 async function prepareDailyLetter(options = {}) {
   const force = Boolean(options.force);
   const scoreAll = Boolean(options.scoreAll);
+  const targetDateKey = options.dateKey || localDateKey();
+  const referenceDate = dateFromKey(targetDateKey);
   if (force) {
     data.analyses = {};
+    data.nextDayPrepared = null;
     saveData();
   }
   const dailyLimit = Number(data.config.dailyLimit || 10);
@@ -1690,25 +1712,61 @@ async function prepareDailyLetter(options = {}) {
         40,
         data.photos.length
       );
-  const candidates = selectScoreCandidates(candidateLimit, { useQualityCheck: true });
+  const candidates = selectScoreCandidates(candidateLimit, { useQualityCheck: true, referenceDate });
   if (candidates.length === 0) return { dailyTen: [], analyses: [] };
 
   assertVisionCaptionReady(data.config);
   sendWorkflowStatus(`正在打分中：已送入 ${candidates.length} 张候选照片，先选出更适合做壁纸的十张。`);
-  await scorePhotosForSelection(candidates, { force });
+  await scorePhotosForSelection(candidates, { force, referenceDate });
 
-  const selected = selectDailyTen().slice(0, dailyLimit);
+  const selected = selectDailyTen({ dateKey: targetDateKey }).slice(0, dailyLimit);
   sendWorkflowStatus(`已选出 ${selected.length} 张高分照片，正在生成旧日来信文案。`);
-  const analyses = await analyzePhotosBatch(selected.map((photo) => photo.id), { force });
+  const analyses = await analyzePhotosBatch(selected.map((photo) => photo.id), { force, referenceDate });
   sendWorkflowStatus("今日十张已完成：模型评分和文案都准备好了。");
   return {
-    dailyTen: publicPhotos(selectDailyTen()),
+    dailyTen: publicPhotos(selectDailyTen({ dateKey: targetDateKey })),
     analyses
   };
 }
 
+function dailyLetterReadyForDate(dateKey) {
+  const selected = selectDailyTen({ dateKey });
+  return selected.length > 0 && selected.every((photo) => data.analyses[photo.id]?.captions?.[0]?.text);
+}
+
+async function prepareNextDayLetter(options = {}) {
+  const dateKey = options.dateKey || shiftedLocalDateKey(1);
+  if (!Array.isArray(data.folders) || data.folders.length === 0 || data.photos.length === 0) {
+    return { skipped: true, reason: "no_photos", dateKey };
+  }
+  assertVisionCaptionReady(data.config);
+
+  const cached = data.nextDayPrepared || {};
+  if (
+    !options.force
+    && cached.dateKey === dateKey
+    && cached.librarySignature === data.librarySignature
+    && dailyLetterReadyForDate(dateKey)
+  ) {
+    return { skipped: true, reason: "already_ready", dateKey, dailyTen: publicPhotos(selectDailyTen({ dateKey })) };
+  }
+
+  sendWorkflowStatus(`正在提前准备 ${dateKey} 的旧日来信，明天会无缝切换。`);
+  const result = await prepareDailyLetter({ dateKey, force: false });
+  data.nextDayPrepared = {
+    dateKey,
+    generatedAt: new Date().toISOString(),
+    librarySignature: data.librarySignature,
+    photoIds: (result.dailyTen || []).map((photo) => photo.id)
+  };
+  saveData();
+  sendWorkflowStatus("明天的旧日来信已经提前写好。");
+  return { ...result, dateKey };
+}
+
 async function analyzePhotosBatch(photoIds, options = {}) {
   const force = Boolean(options.force);
+  const referenceDate = options.referenceDate || new Date();
   const photos = photoIds
     .map((id) => data.photos.find((item) => item.id === id))
     .filter(Boolean)
@@ -1730,8 +1788,8 @@ async function analyzePhotosBatch(photoIds, options = {}) {
     const results = [];
     for (const photo of photos) {
       sendWorkflowStatus(`正在生成文案：${results.length + 1} / ${photos.length}。只为模型选出的高分照片写文案。`);
-      const raw = await callOpenAICompatible(photo);
-      const analysis = normalizeAnalysis(photo, raw, usedCaptions);
+      const raw = await callOpenAICompatible(photo, { referenceDate });
+      const analysis = normalizeAnalysis(photo, raw, usedCaptions, { referenceDate });
       if (!analysis.captions[0]?.text) {
         throw new Error(`第 ${results.length + 1} 张照片没有通过文案校验，请重新生成。`);
       }
@@ -1745,7 +1803,7 @@ async function analyzePhotosBatch(photoIds, options = {}) {
 
   let rawItems = [];
   try {
-    rawItems = await callOpenAICompatibleBatch(photos);
+    rawItems = await callOpenAICompatibleBatch(photos, { referenceDate });
   } catch (error) {
     throw new Error(`LLM 文案生成失败：${error.message}`);
   }
@@ -1760,7 +1818,7 @@ async function analyzePhotosBatch(photoIds, options = {}) {
     if (!raw) {
       throw new Error(`LLM 没有返回第 ${results.length + 1} 张照片的文案。`);
     }
-    const analysis = normalizeAnalysis(photo, raw, usedCaptions);
+    const analysis = normalizeAnalysis(photo, raw, usedCaptions, { referenceDate });
     if (!analysis.captions[0]?.text) {
       throw new Error(`第 ${results.length + 1} 张照片没有通过文案校验，请重新生成。`);
     }
@@ -1787,21 +1845,23 @@ async function analyzePhoto(photoId) {
   return analysis;
 }
 
-function selectDailyTen() {
+function selectDailyTen(options = {}) {
+  const targetDateKey = options.dateKey || localDateKey();
+  const referenceDate = options.referenceDate || dateFromKey(targetDateKey);
   const visible = data.photos.filter((photo) => !photo.hidden);
   const dailyLimit = Number(data.config.dailyLimit || 10);
   if (visible.length === 0 || dailyLimit <= 0) return [];
   const targetCandidateLimit = Math.min(visible.length, Math.max(dailyLimit * 4, 40));
-  const datePool = selectDateProximityPool(visible, targetCandidateLimit);
+  const datePool = selectDateProximityPool(visible, targetCandidateLimit, { referenceDate });
   const candidateLimit = Math.min(datePool.length, targetCandidateLimit);
-  const pool = selectScoreCandidates(candidateLimit, { source: datePool });
+  const pool = selectScoreCandidates(candidateLimit, { source: datePool, referenceDate });
   const finalPool = pool.length >= dailyLimit ? pool : visible;
-  const todayKey = localDateKey();
+  const todayKey = targetDateKey;
   const ranked = finalPool
     .map((photo) => ({
       photo,
-      score: selectionPhotoScore(photo),
-      today: dateRelationship(photo.date) === "那年今日" ? 1 : 0
+      score: selectionPhotoScore(photo, referenceDate),
+      today: dateRelationship(photo.date, referenceDate) === "那年今日" ? 1 : 0
     }))
     .sort((a, b) => {
       if (a.today !== b.today && Math.abs(a.score - b.score) < 18) return b.today - a.today;
@@ -2436,6 +2496,7 @@ async function scanPhotoFolders(selected) {
   }));
   data.folders = selected;
   data.librarySignature = scannedLibrarySignature(selected, data.photos);
+  data.nextDayPrepared = null;
   saveData();
 }
 
@@ -2503,6 +2564,8 @@ ipcMain.handle("llm:analyze-daily-ten", async (_event, photoIds, options = {}) =
 });
 
 ipcMain.handle("llm:prepare-daily-letter", async (_event, options = {}) => prepareDailyLetter(options));
+
+ipcMain.handle("llm:prepare-next-day-letter", async (_event, options = {}) => prepareNextDayLetter(options));
 
 ipcMain.handle("wallpaper:set", async (_event, photoId) => {
   const photo = data.photos.find((item) => item.id === photoId);
