@@ -305,6 +305,15 @@ function localDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function stableHashNumber(input) {
+  const digest = crypto.createHash("sha1").update(String(input)).digest("hex").slice(0, 8);
+  return parseInt(digest, 16) / 0xffffffff;
+}
+
+function dailyVarietyScore(photo, dateKey = localDateKey()) {
+  return stableHashNumber(`${dateKey}|${photo.id}`);
+}
+
 function createWindow() {
   Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
@@ -1677,17 +1686,32 @@ function selectDailyTen() {
   const modelScored = datePool.filter((photo) => hasModelScore(photo.id) && data.analyses[photo.id]?.source !== "llm_visual_score");
   const pool = modelScored.length >= dailyLimit ? modelScored : selectScoreCandidates(dailyLimit, { source: datePool });
   const finalPool = pool.length >= dailyLimit ? pool : visible;
-
-  return finalPool
+  const todayKey = localDateKey();
+  const ranked = finalPool
+    .map((photo) => ({
+      photo,
+      score: combinedPhotoScore(photo),
+      today: dateRelationship(photo.date) === "那年今日" ? 1 : 0
+    }))
     .sort((a, b) => {
-      const aToday = dateRelationship(a.date) === "那年今日" ? 1 : 0;
-      const bToday = dateRelationship(b.date) === "那年今日" ? 1 : 0;
-      const aScore = combinedPhotoScore(a);
-      const bScore = combinedPhotoScore(b);
-      if (aToday !== bToday && Math.abs(aScore - bScore) < 18) return bToday - aToday;
+      if (a.today !== b.today && Math.abs(a.score - b.score) < 18) return b.today - a.today;
+      if (a.score !== b.score) return b.score - a.score;
+      return b.photo.lastModified - a.photo.lastModified;
+    });
+
+  const varietyPoolSize = Math.min(ranked.length, Math.max(dailyLimit * 3, 24));
+  const varietyPool = ranked.slice(0, varietyPoolSize);
+  return varietyPool
+    .sort((a, b) => {
+      const aVariety = dailyVarietyScore(a.photo, todayKey) * 20;
+      const bVariety = dailyVarietyScore(b.photo, todayKey) * 20;
+      const aScore = a.score + aVariety;
+      const bScore = b.score + bVariety;
+      if (a.today !== b.today && Math.abs(aScore - bScore) < 18) return b.today - a.today;
       if (aScore !== bScore) return bScore - aScore;
-      return b.lastModified - a.lastModified;
+      return b.photo.lastModified - a.photo.lastModified;
     })
+    .map((item) => item.photo)
     .slice(0, dailyLimit);
 }
 
