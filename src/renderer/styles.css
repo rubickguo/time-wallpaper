@@ -765,6 +765,41 @@ p {
   outline: none;
 }
 
+.settings-switch {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(60, 51, 40, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.settings-switch input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  accent-color: #315445;
+}
+
+.settings-switch span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-switch strong {
+  color: #302b23;
+  font-size: 13px;
+}
+
+.settings-switch small {
+  color: #766d5e;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .settings-hint {
   margin: -4px 0 2px;
   padding: 10px 12px;

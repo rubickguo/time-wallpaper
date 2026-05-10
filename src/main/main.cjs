@@ -54,6 +54,7 @@ const DEFAULT_CONFIG = {
   previousWallpaperStyle: "10",
   previousTileWallpaper: "0",
   previousWallpapers: "",
+  autoLaunchEnabled: false,
   timeoutMs: 90000
 };
 
@@ -246,6 +247,36 @@ function saveData() {
 function sendWorkflowStatus(message) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("workflow:status", message);
+  }
+}
+
+function autoLaunchOptions(enabled = Boolean(data.config.autoLaunchEnabled)) {
+  const options = {
+    openAtLogin: Boolean(enabled),
+    openAsHidden: false
+  };
+  if (!app.isPackaged) {
+    options.path = process.execPath;
+    options.args = [app.getAppPath()];
+  }
+  return options;
+}
+
+function applyAutoLaunchSetting(enabled = Boolean(data.config.autoLaunchEnabled)) {
+  if (process.platform !== "win32") return;
+  try {
+    app.setLoginItemSettings(autoLaunchOptions(enabled));
+  } catch (error) {
+    console.error("Failed to update auto launch setting", error);
+  }
+}
+
+function readAutoLaunchEnabled() {
+  if (process.platform !== "win32") return Boolean(data.config.autoLaunchEnabled);
+  try {
+    return Boolean(app.getLoginItemSettings(autoLaunchOptions()).openAtLogin);
+  } catch {
+    return Boolean(data.config.autoLaunchEnabled);
   }
 }
 
@@ -2254,6 +2285,7 @@ async function setWallpaperCycleEnabled(enabled) {
 }
 
 ipcMain.handle("app:get-state", async () => {
+  data.config.autoLaunchEnabled = readAutoLaunchEnabled();
   const previewPhotos = publicPhotoPreviewList(data.photos);
   const dailyTen = publicPhotos(selectDailyTen());
   return {
@@ -2324,6 +2356,8 @@ ipcMain.handle("config:save", async (_event, config) => {
   data.config = {
     ...nextConfig
   };
+  applyAutoLaunchSetting(Boolean(data.config.autoLaunchEnabled));
+  data.config.autoLaunchEnabled = readAutoLaunchEnabled();
   saveData();
   return { ...data.config, apiKey: data.config.apiKey ? "********" : "" };
 });
@@ -2363,6 +2397,7 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(() => {
     loadData();
+    applyAutoLaunchSetting(Boolean(data.config.autoLaunchEnabled));
     registerPhotoProtocol();
     createWindow();
     if (data.config.wallpaperCycleEnabled) {

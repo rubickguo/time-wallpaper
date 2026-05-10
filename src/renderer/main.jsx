@@ -684,6 +684,17 @@ function SettingsView({ config, setConfig, onSave, busy }) {
             onChange={(event) => setConfig({ ...config, timeoutMs: Number(event.target.value) })}
           />
         </label>
+        <label className="settings-switch">
+          <input
+            type="checkbox"
+            checked={Boolean(config.autoLaunchEnabled)}
+            onChange={(event) => setConfig({ ...config, autoLaunchEnabled: event.target.checked })}
+          />
+          <span>
+            <strong>开机自动启动</strong>
+            <small>登录 Windows 后自动打开时间壁纸，适合配合桌面循环使用。</small>
+          </span>
+        </label>
         <button className="primary" onClick={onSave} disabled={busy}>
           <Check size={17} /> 保存配置
         </button>
