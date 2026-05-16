@@ -23,7 +23,54 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const api = window.timeWallpaper;
+function createPreviewApi() {
+  let previewState = {
+    folders: [],
+    photos: [],
+    photoCount: 0,
+    analyses: {},
+    dailyTen: [],
+    config: {},
+    todayKey: localDateKey(),
+    wallpaperCycle: { enabled: false, index: 0, intervalMs: 3600000 }
+  };
+
+  return {
+    async getState() {
+      return previewState;
+    },
+    async pickFolders() {
+      return [];
+    },
+    async scanPhotos(folders = []) {
+      previewState = { ...previewState, folders, photos: [], photoCount: 0, dailyTen: [], analyses: {} };
+      return previewState;
+    },
+    async prepareDailyLetter() {
+      return previewState;
+    },
+    async analyzeDailyTen() {
+      return [];
+    },
+    async saveConfig(config) {
+      previewState = { ...previewState, config };
+      return config;
+    },
+    async setWallpaper() {
+      return true;
+    },
+    async setWallpaperCycle(enabled) {
+      const wallpaperCycle = { ...previewState.wallpaperCycle, enabled };
+      previewState = { ...previewState, wallpaperCycle };
+      return wallpaperCycle;
+    },
+    onWorkflowStatus() {
+      return () => {};
+    }
+  };
+}
+
+const api = window.timeWallpaper || createPreviewApi();
 
 function localDateKey(date = new Date()) {
   const year = date.getFullYear();

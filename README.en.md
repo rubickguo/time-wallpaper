@@ -1,8 +1,17 @@
 # Time Wallpaper
 
-A private memory wallpaper app for Windows. It selects ten meaningful photos from your local library, writes restrained and poetic captions for them, and can rotate them as desktop wallpapers.
+Turn old local photos into a daily memory ritual on your Windows desktop.
+
+Time Wallpaper selects ten meaningful "on this day" photos from your local library, writes restrained and poetic captions for them, and rotates them as desktop wallpapers. It is built for people with years of photos they rarely revisit: the app handles selection, layout, captioning, and wallpaper rendering while keeping the photo library local by default.
 
 Chinese version: [README.md](README.md)
+
+## Highlights
+
+- **A small daily set**: exactly ten photos, so memory review stays lightweight.
+- **Grounded captions**: avoids invented relationships, locations, events, and sentimental overreach.
+- **Wallpaper-first rendering**: adapts to real monitor resolution and places text in a safer desktop area.
+- **Flexible LLM providers**: supports OpenAI-compatible and Anthropic-compatible APIs.
 
 ## Features
 

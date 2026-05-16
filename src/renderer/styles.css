@@ -1691,16 +1691,90 @@ h1 {
 
 @media (max-width: 780px) {
   body {
-    min-width: 640px;
+    min-width: 0;
+    overflow: auto;
+  }
+
+  .app-shell,
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(73, 64, 47, 0.12);
+    overflow-x: auto;
+  }
+
+  .brand {
+    flex: 0 0 auto;
+    min-height: 40px;
+  }
+
+  .brand span {
+    display: none;
+  }
+
+  .sidebar-toggle,
+  .status-panel {
+    display: none;
+  }
+
+  nav {
+    display: flex;
+    flex: 1 0 auto;
+    gap: 8px;
+    margin-top: 0;
+  }
+
+  nav button {
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    padding: 0;
   }
 
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+    min-height: 0;
+    padding-right: 0;
   }
 
   .actions {
+    flex-wrap: wrap;
     align-self: flex-start;
+  }
+
+  main {
+    padding: 18px 12px 24px;
+  }
+
+  h1 {
+    font-size: 26px;
+  }
+
+  .letter-hero {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .letter-command {
+    gap: 14px;
+  }
+
+  .letter-actions {
+    width: 100%;
   }
 
   .letter-wall {
