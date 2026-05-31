@@ -14,6 +14,7 @@ import {
   Play,
   Ruler,
   Scan,
+  Search,
   Settings,
   Sparkles,
   RefreshCw,
@@ -71,6 +72,15 @@ function createPreviewApi() {
 }
 
 const api = window.timeWallpaper || createPreviewApi();
+const SIDEBAR_PREFERENCE_KEY = "timeWallpaper.sidebarCollapsed";
+
+function readSidebarPreference() {
+  try {
+    return window.localStorage.getItem(SIDEBAR_PREFERENCE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function localDateKey(date = new Date()) {
   const year = date.getFullYear();
@@ -102,7 +112,8 @@ function App() {
   const [readerOpen, setReaderOpen] = useState(false);
   const [letterOpening, setLetterOpening] = useState(false);
   const [readerIndex, setReaderIndex] = useState(0);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarPreference);
+  const [libraryPreviewPhoto, setLibraryPreviewPhoto] = useState(null);
   const [configDraft, setConfigDraft] = useState({});
   const openingTimers = useRef([]);
   const stateRef = useRef(state);
@@ -117,6 +128,14 @@ function App() {
     stateRef.current = state;
   }, [state]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_PREFERENCE_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      // Local preference persistence is best-effort.
+    }
+  }, [sidebarCollapsed]);
+
   function needsDailyPreparation(snapshot) {
     return Boolean(
       snapshot?.folders?.length
@@ -130,6 +149,7 @@ function App() {
     dailyPrepareRef.current = true;
     setBusy(true);
     setReaderOpen(false);
+    setLibraryPreviewPhoto(null);
     setLetterOpening(false);
     setMessage("正在给今天的十张照片评分和写信，写好前先不拆开旧日来信。");
     try {
@@ -169,6 +189,7 @@ function App() {
     libraryRefreshRef.current = true;
     setBusy(true);
     setReaderOpen(false);
+    setLibraryPreviewPhoto(null);
     setLetterOpening(false);
     setMessage("正在检查照片文件夹有没有新的回声。");
     try {
@@ -224,6 +245,7 @@ function App() {
     dayRefreshRef.current = true;
     setBusy(true);
     setReaderOpen(false);
+    setLibraryPreviewPhoto(null);
     setLetterOpening(false);
     setReaderIndex(0);
     setState((old) => ({ ...old, dailyTen: [], analyses: {} }));
@@ -309,6 +331,7 @@ function App() {
         return;
       }
       setReaderOpen(false);
+      setLibraryPreviewPhoto(null);
       setReaderIndex(0);
       setState((old) => ({
         ...old,
@@ -350,6 +373,7 @@ function App() {
     setMessage("正在建立本地照片索引，不上传原图。");
     try {
       setReaderOpen(false);
+      setLibraryPreviewPhoto(null);
       setReaderIndex(0);
       setState((old) => ({
         ...old,
@@ -470,8 +494,15 @@ function App() {
       setMessage("这张照片还没有 AI 文案，先生成文案再打开。");
       return;
     }
+    setLibraryPreviewPhoto(null);
     setReaderIndex(index);
     setReaderOpen(true);
+  }
+
+  function openLibraryPreview(photo) {
+    setReaderOpen(false);
+    setLetterOpening(false);
+    setLibraryPreviewPhoto(photo);
   }
 
   async function openLetterCeremony() {
@@ -555,10 +586,8 @@ function App() {
           <LibraryView
             photos={state.photos}
             analyses={state.analyses}
-            onOpen={(photo) => {
-              const idx = state.dailyTen.findIndex((item) => item.id === photo.id);
-              openReader(Math.max(idx, 0));
-            }}
+            photoCount={state.photoCount}
+            onOpen={openLibraryPreview}
           />
         )}
 
@@ -582,6 +611,17 @@ function App() {
           onPrev={() => setReaderIndex((value) => Math.max(0, value - 1))}
           onNext={() => setReaderIndex((value) => Math.min(state.dailyTen.length - 1, value + 1))}
           onWallpaper={() => setWallpaper(currentPhoto.id)}
+        />
+      )}
+
+      {libraryPreviewPhoto && (
+        <Reader
+          photo={libraryPreviewPhoto}
+          analysis={state.analyses[libraryPreviewPhoto.id]}
+          total={1}
+          index={0}
+          onClose={() => setLibraryPreviewPhoto(null)}
+          onWallpaper={() => setWallpaper(libraryPreviewPhoto.id)}
         />
       )}
 
@@ -700,7 +740,29 @@ function LetterOpening({ photos, summary, onSkip }) {
   );
 }
 
-function LibraryView({ photos, analyses, onOpen }) {
+function LibraryView({ photos, analyses, photoCount, onOpen }) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredPhotos = useMemo(() => {
+    if (!normalizedQuery) return photos;
+    return photos.filter((photo) => {
+      const analysis = analyses[photo.id];
+      const haystack = [
+        photo.name,
+        photo.date,
+        photo.dateSource,
+        photo.exif?.camera,
+        photo.exif?.lens,
+        photo.exif?.settings,
+        analysis?.captions?.[0]?.text
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [analyses, normalizedQuery, photos]);
+
   if (photos.length === 0) {
     return (
       <section className="empty-state">
@@ -712,16 +774,41 @@ function LibraryView({ photos, analyses, onOpen }) {
   }
 
   return (
-    <section className="library-grid">
-      {photos.slice(0, 120).map((photo) => (
-        <button className={`library-card ${photo.exif?.orientation || ""}`} key={photo.id} onClick={() => onOpen(photo)}>
-          <img src={photo.fileUrl} alt="" loading="lazy" />
-          <div>
-            <span>{photo.date}</span>
-            <strong>{analyses[photo.id]?.captions?.[0]?.text || photo.name}</strong>
-          </div>
-        </button>
-      ))}
+    <section className="library-section">
+      <div className="library-toolbar">
+        <div>
+          <span>本地时间线</span>
+          <strong>{filteredPhotos.length} / {photoCount || photos.length} 张</strong>
+        </div>
+        <label className="library-search">
+          <Search size={16} />
+          <input
+            value={query}
+            placeholder="搜索日期、文件名、文案"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+      </div>
+
+      {filteredPhotos.length === 0 ? (
+        <div className="empty-state compact">
+          <Search size={34} />
+          <h2>没有匹配的照片</h2>
+          <p>换一个日期、文件名或文案关键词。</p>
+        </div>
+      ) : (
+        <div className="library-grid">
+          {filteredPhotos.map((photo) => (
+            <button className={`library-card ${photo.exif?.orientation || ""}`} key={photo.id} onClick={() => onOpen(photo)}>
+              <img src={photo.fileUrl} alt="" loading="lazy" />
+              <div>
+                <span>{photo.date}</span>
+                <strong>{analyses[photo.id]?.captions?.[0]?.text || photo.name}</strong>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -856,8 +943,7 @@ function SettingsView({ config, setConfig, onSave, busy }) {
 }
 
 function Reader({ photo, analysis, total, index, onClose, onPrev, onNext, onWallpaper }) {
-  const caption = analysis?.captions?.[0]?.text;
-  if (!caption) return null;
+  const caption = analysis?.captions?.[0]?.text || photo.name || "未生成文案的本地照片";
   const exif = photo.exif || {};
   const dateSourceText =
     photo.dateSource === "exif"
@@ -870,7 +956,7 @@ function Reader({ photo, analysis, total, index, onClose, onPrev, onNext, onWall
       ? "AI 文案"
     : analysis?.source === "llm_feature_only" || analysis?.source === "llm_feature_batch"
         ? "AI 文案"
-        : "AI 文案";
+        : "本地照片";
   const metaItems = [
     exif.camera ? { icon: <Camera size={15} />, label: "设备", value: exif.camera } : null,
     exif.lens ? { icon: <Aperture size={15} />, label: "镜头", value: exif.lens } : null,
@@ -887,8 +973,12 @@ function Reader({ photo, analysis, total, index, onClose, onPrev, onNext, onWall
         <img className="reader-photo-main" src={photo.fileUrl} alt="" />
       </div>
       <button className="reader-close" onClick={onClose}>收起</button>
-      <button className="reader-nav left" onClick={onPrev} disabled={index === 0}><ChevronLeft /></button>
-      <button className="reader-nav right" onClick={onNext} disabled={index === total - 1}><ChevronRight /></button>
+      {total > 1 && (
+        <>
+          <button className="reader-nav left" onClick={onPrev} disabled={index === 0}><ChevronLeft /></button>
+          <button className="reader-nav right" onClick={onNext} disabled={index === total - 1}><ChevronRight /></button>
+        </>
+      )}
       <div className="reader-content">
         <div className="reader-titlebar">
           <span className="reader-count">{String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}</span>
